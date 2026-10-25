@@ -223,7 +223,7 @@ select{padding-right:34px;
    Golf Stats — offline-first single-file tracker
    Storage: IndexedDB (courses, rounds, state)  |  Export/import: JSON
    ========================================================================= */
-var APP_VERSION = '1.0.0';
+var APP_VERSION = '1.0.1';
 var DB_NAME = 'golfstats';
 var DB_VER = 1;
 
@@ -409,10 +409,15 @@ function byDateDesc(a, b) {
 function byDateAsc(a, b) { return -byDateDesc(a, b); }
 
 /* ---------------------------- stats engine ------------------------------ */
+/* pars the app accepts: 3 to 6 (a par-6 row only shows up when one was played) */
+var PAR_MIN = 3, PAR_MAX = 6, PAR_ROWS = [3, 4, 5, 6];
 function newAcc() {
   return {
     rounds: 0, holes: 0, strokes: 0, par: 0, putts: 0, penalties: 0,
-    byPar: { 3: { n: 0, strokes: 0 }, 4: { n: 0, strokes: 0 }, 5: { n: 0, strokes: 0 } },
+    byPar: {
+      3: { n: 0, strokes: 0 }, 4: { n: 0, strokes: 0 },
+      5: { n: 0, strokes: 0 }, 6: { n: 0, strokes: 0 }
+    },
     eagle: 0, birdie: 0, parHoles: 0, bogey: 0, doublePlus: 0,
     fwOpp: 0, fwHit: 0, fwLeft: 0, fwRight: 0,
     girOpp: 0, girHit: 0,
@@ -427,7 +432,7 @@ function newAcc() {
 
 function accHole(a, h) {
   if (!h || !isNum(h.strokes) || h.strokes <= 0) return;
-  var par = isNum(h.par) && h.par >= 3 ? h.par : 4;
+  var par = isNum(h.par) && h.par >= PAR_MIN ? h.par : 4;
   var rel = h.strokes - par;
 
   a.holes++;
@@ -542,7 +547,7 @@ function derive(a) {
   d.sgPerRound = a.rounds ? a.sgSum / a.rounds : null;
   d.sgPerHole = a.sgN ? a.sgSum / a.sgN : null;
   d.avgByPar = {};
-  [3, 4, 5].forEach(function (p) {
+  PAR_ROWS.forEach(function (p) {
     var b = a.byPar[p];
     d.avgByPar[p] = b && b.n
       ? { n: b.n, avg: b.strokes / b.n, toPar: (b.strokes - b.n * p) / b.n }
@@ -645,7 +650,9 @@ function tabs(cur) {
   }).join('') + '</nav>';
 }
 function parTable(a) {
-  var rows = [3, 4, 5].map(function (p) {
+  var rows = PAR_ROWS.filter(function (p) {
+    return p < 6 || (a.byPar[6] && a.byPar[6].n);
+  }).map(function (p) {
     var b = a.byPar[p];
     if (!b || !b.n) return '<tr><td>Par ' + p + '</td><td class="dim">—</td><td class="dim">—</td><td class="dim">0</td></tr>';
     var avg = b.strokes / b.n, tp = (b.strokes - b.n * p) / b.n;
@@ -759,6 +766,7 @@ function newDraft() {
     courseName: '',
     tee: '',
     tees: [],
+    savePars: false,
     pars: [4, 4, 3, 4, 5, 4, 3, 4, 5, 4, 4, 3, 5, 4, 3, 4, 5, 4]
   };
 }
@@ -799,12 +807,17 @@ function viewSetup() {
       '<div class="card">' +
         '<div class="row between"><span class="sec">Hole pars</span>' +
           '<span class="pill" id="partotal">Par ' + d.pars.reduce(function (x, y) { return x + y; }, 0) + '</span></div>' +
-        '<p class="hint">Auto-filled from the saved course — adjust any hole before you start.</p>' +
+        '<p class="hint">' + (locked
+          ? 'Loaded from “' + esc(d.courseName) + '” — adjust any hole for this round only.'
+          : 'The template starts at par 72 — adjust any hole before you start.') + '</p>' +
         '<div class="pargrid">' + d.pars.map(function (p, i) {
           return '<label class="parcell"><span>' + (i + 1) + '</span>' +
             '<input type="number" inputmode="numeric" min="3" max="6" data-field="par" data-i="' + i +
             '" value="' + p + '" aria-label="Par for hole ' + (i + 1) + '"></label>';
         }).join('') + '</div>' +
+        (locked ? '<div class="chips"><button type="button" class="chip' + (d.savePars ? ' on' : '') +
+          '" data-act="save-pars-toggle" aria-pressed="' + (d.savePars ? 'true' : 'false') + '">' +
+          'Also update the saved course</button></div>' : '') +
       '</div>' +
     '</main>' +
     '<footer class="app-foot"><button type="button" class="btn primary xl" data-act="start-round">Start round</button></footer>';
@@ -868,6 +881,14 @@ function cardScore(h, par) {
     '</div>' +
     '<div class="chips">' + quick +
       '<button type="button" class="chip" data-act="score-clear">Clear</button></div>' +
+    '<div class="row between mt"><span class="sec">Hole par</span>' +
+      '<div class="row gap">' +
+        '<button type="button" class="btn sm" data-act="par-dec" aria-label="Lower par"' +
+          (par <= PAR_MIN ? ' disabled' : '') + '>−</button>' +
+        '<b style="min-width:2ch;text-align:center;font-size:18px">' + par + '</b>' +
+        '<button type="button" class="btn sm" data-act="par-inc" aria-label="Raise par"' +
+          (par >= PAR_MAX ? ' disabled' : '') + '>+</button>' +
+      '</div></div>' +
   '</div>';
 }
 
@@ -1254,6 +1275,8 @@ function importJSON(text) {
   rounds = rounds.filter(function (r) { return r && r.id && Array.isArray(r.holes); });
   courses = courses.filter(function (c) { return c && c.id && c.name; });
   if (!rounds.length && !courses.length) { alert('No rounds or courses found in that backup.'); return; }
+  rounds.forEach(normaliseRound);
+  courses.forEach(normaliseCourse);
   if (!confirm('Import ' + rounds.length + ' round(s) and ' + courses.length + ' course(s)?\n' +
     'Items with the same id will be replaced.')) return;
   var chain = Promise.resolve();
@@ -1303,6 +1326,31 @@ function flushSave() {
   r.updatedAt = Date.now();
   try { dbPut('rounds', r); } catch (e) { /* noop */ }
 }
+/* older or hand-edited backups can hold string, null or out-of-range pars — clamp on load */
+function parNum(v, fallback) {
+  var n = parseInt(v, 10);
+  return clamp(isNaN(n) ? fallback : n, PAR_MIN, PAR_MAX);
+}
+function normaliseRound(r) {
+  if (!r || !Array.isArray(r.holes)) return r;
+  if (!Array.isArray(r.pars) || r.pars.length !== r.holes.length) {
+    r.pars = r.holes.map(function (h) { return parNum(h && h.par, 4); });
+  }
+  r.holes.forEach(function (h, i) {
+    if (!h || typeof h !== 'object') return;
+    h.par = parNum(h.par, parNum(r.pars[i], 4));
+  });
+  return r;
+}
+function normaliseCourse(c) {
+  if (!c || !Array.isArray(c.pars)) return c;
+  c.pars = c.pars.map(function (p) { return parNum(p, 4); });
+  return c;
+}
+function normaliseData() {
+  (S.rounds || []).forEach(normaliseRound);
+  (S.courses || []).forEach(normaliseCourse);
+}
 async function reloadAll() {
   try {
     S.courses = (await dbAll('courses')) || [];
@@ -1313,6 +1361,7 @@ async function reloadAll() {
     S.courses = S.courses || [];
     S.rounds = S.rounds || [];
   }
+  normaliseData();
   S.rounds.sort(byDateDesc);
   var st = null;
   try { st = await dbGet('state', 'active'); } catch (e) { st = null; }
@@ -1342,6 +1391,18 @@ function setHole(patch) {
   r.updatedAt = Date.now();
   saveActive();
 }
+/* par can be corrected mid-round (typo in setup, wrong tee card) — 3..6 like the grid */
+function stepPar(delta) {
+  var r = S.activeRound, h = curHole();
+  if (!r || !h) return;
+  var cur = isNum(h.par) && h.par >= PAR_MIN ? h.par : 4;
+  var next = clamp(cur + delta, PAR_MIN, PAR_MAX);
+  if (next === cur) return;
+  setHole({ par: next });
+  if (Array.isArray(r.pars) && r.pars.length === r.holes.length) r.pars[S.hole] = next;
+  render();
+  toast('Hole ' + (S.hole + 1) + ' par ' + next);
+}
 function goHole(i) {
   var r = S.activeRound;
   if (!r) return;
@@ -1353,7 +1414,7 @@ function startRound() {
   var d = S.draft || newDraft();
   var pars = d.pars.map(function (p) {
     var n = parseInt(p, 10);
-    return clamp(isNaN(n) ? 4 : n, 3, 6);
+    return clamp(isNaN(n) ? 4 : n, PAR_MIN, PAR_MAX);
   });
   var name = String(d.courseName || '').trim();
   var course = d.courseId ? getCourse(d.courseId) : null;
@@ -1393,12 +1454,20 @@ function startRound() {
   }
 
   if (course) {
-    course.pars = pars.slice();
+    /* never rewrite a saved course's pars unless the player ticked the box in setup */
+    var courseChanged = false;
+    if (d.savePars && String(course.pars || '') !== String(pars)) {
+      course.pars = pars.slice();
+      courseChanged = true;
+    }
     if (tee && (course.tees || []).indexOf(tee) < 0) {
       course.tees = (course.tees || []).concat([tee]);
+      courseChanged = true;
     }
-    course.updatedAt = Date.now();
-    dbPut('courses', course).catch(function () {});
+    if (courseChanged) {
+      course.updatedAt = Date.now();
+      dbPut('courses', course).catch(function () {});
+    }
     createRound(course.id);
     return;
   }
@@ -1508,6 +1577,12 @@ function handleAct(name, el) {
       S.draft = null; S.view = 'rounds'; S.resetScroll = true; render(); return;
     case 'start-round':
       startRound(); return;
+    case 'save-pars-toggle':
+      if (!S.draft) return;
+      S.draft.savePars = !S.draft.savePars;
+      render();
+      toast(S.draft.savePars ? 'Saved course will be updated' : 'This round only');
+      return;
     case 'open-round':
       flushSave(); openRound(el.getAttribute('data-id')); return;
     case 'finish-round':
@@ -1579,6 +1654,8 @@ function handleAct(name, el) {
       break;
     }
     case 'score-clear': setHole({ strokes: null }); break;
+    case 'par-inc': stepPar(1); return;
+    case 'par-dec': stepPar(-1); return;
     case 'putts-set': setHole({ putts: parseInt(v, 10) }); break;
     case 'putts-inc': setHole({ putts: clamp((isNum(h.putts) ? h.putts : 0) + 1, 0, 10) }); break;
     case 'putts-dec': {
@@ -1629,7 +1706,7 @@ function updateDraftPars(el, writeBack) {
   var i = parseInt(el.getAttribute('data-i'), 10);
   if (isNaN(i) || !S.draft.pars[i] && S.draft.pars[i] !== 0) return;
   var n = parseInt(el.value, 10);
-  S.draft.pars[i] = clamp(isNaN(n) ? 4 : n, 3, 6);
+  S.draft.pars[i] = clamp(isNaN(n) ? 4 : n, PAR_MIN, PAR_MAX);
   if (writeBack) el.value = S.draft.pars[i];
   var pt = document.getElementById('partotal');
   if (pt) {
@@ -1640,6 +1717,7 @@ function pickCourse(id) {
   var d = S.draft;
   if (!d) return;
   d.courseId = id || '';
+  d.savePars = false;
   if (d.courseId) {
     var c = getCourse(d.courseId);
     if (c) {

@@ -303,6 +303,95 @@
     ok('importBadSilent', (function () { try { importJSON('{bad json'); } catch (e) { return false; } return true; })());
   });
 
+  /* -------------------------------- pars --------------------------------- */
+  run('parStats', function () {
+    var a = newAcc();
+    accHole(a, { par: 6, strokes: 6 });
+    accHole(a, { par: 4, strokes: 5 });
+    ok('byPar6', a.byPar[6] && a.byPar[6].n === 1 && a.byPar[6].strokes === 6);
+    ok('byPar4', a.byPar[4].n === 1 && a.byPar[4].strokes === 5);
+    var d = derive(a);
+    ok('avgByPar6', d.avgByPar[6] && d.avgByPar[6].n === 1 && d.avgByPar[6].toPar === 0);
+    ok('accTotals', a.strokes === 11 && a.par === 10, a.strokes + '/' + a.par);
+    var t = parTable(a);
+    ok('parTableHas6', t.indexOf('Par 6') >= 0 && t.indexOf('Par 3') >= 0);
+    var b = newAcc();
+    accHole(b, { par: 4, strokes: 4 });
+    ok('parTableNo6', parTable(b).indexOf('Par 6') < 0);
+    ok('parTableHas5', parTable(b).indexOf('Par 5') >= 0);
+  });
+
+  run('parNormalise', function () {
+    var keepR = S.rounds, keepC = S.courses;
+    S.rounds = [{ id: 'n1', date: '2026-01-01', status: 'done', pars: [],
+      holes: [{ par: '5', strokes: 5 }, { par: null, strokes: 4 }, { par: 9, strokes: 6 }] }];
+    S.courses = [{ id: 'nc', name: 'Odd Course', pars: ['4', 7, null] }];
+    normaliseData();
+    var hs = S.rounds[0].holes, ps = S.courses[0].pars;
+    ok('normParsArray', S.rounds[0].pars.length === 3 && S.rounds[0].pars[0] === 5);
+    ok('normStringPar', hs[0].par === 5, hs[0].par);
+    ok('normNullPar', hs[1].par === 4, hs[1].par);
+    ok('normHighPar', hs[2].par === PAR_MAX, hs[2].par);
+    ok('normCoursePars', ps[0] === 4 && ps[1] === PAR_MAX && ps[2] === 4, JSON.stringify(ps));
+    ok('parNumFallback', parNum('x', 4) === 4 && parNum(2, 4) === PAR_MIN && parNum(9, 4) === PAR_MAX);
+    var ir = normaliseRound({ id: 'i1', holes: [{ par: '4' }, { par: 99 }, null] });
+    ok('normRoundFn', ir.pars.length === 3 && ir.holes[0].par === 4 && ir.holes[1].par === PAR_MAX, JSON.stringify(ir.pars));
+    var ic = normaliseCourse({ id: 'i2', pars: ['5', '', 2] });
+    ok('normCourseFn', ic.pars[0] === 5 && ic.pars[1] === 4 && ic.pars[2] === PAR_MIN, JSON.stringify(ic.pars));
+    ok('normIdempotent', normaliseRound(ir) === ir && ir.holes[1].par === PAR_MAX);
+    S.rounds = keepR; S.courses = keepC;
+  });
+
+  run('parEdit', function () {
+    var r = { id: 'pe', date: '2026-02-02', status: 'active', courseName: 'Par Lab', pars: [4, 4, 4],
+      holes: [{ n: 1, par: 4, strokes: 4 }, { n: 2, par: 3, strokes: null }, { n: 3, par: 6, strokes: null }] };
+    var keepR = S.rounds, keepA = S.activeRound, keepId = S.activeId, keepHole = S.hole, keepView = S.view;
+    S.rounds = [r]; S.activeRound = r; S.activeId = 'pe'; S.hole = 0; S.view = 'hole'; render();
+    ok('parEditUi', !!document.querySelector('[data-act="par-inc"]') && !!document.querySelector('[data-act="par-dec"]'));
+    handleAct('par-inc', mkBtn({ 'data-act': 'par-inc' }));
+    ok('parInc', r.holes[0].par === 5 && r.pars[0] === 5, r.holes[0].par);
+    ok('parBadge', String(document.querySelector('.parbadge b').textContent).indexOf('5') >= 0,
+      document.querySelector('.parbadge b').textContent);
+    handleAct('par-dec', mkBtn({ 'data-act': 'par-dec' }));
+    handleAct('par-dec', mkBtn({ 'data-act': 'par-dec' }));
+    ok('parDec', r.holes[0].par === 3, r.holes[0].par);
+    handleAct('par-dec', mkBtn({ 'data-act': 'par-dec' }));
+    ok('parFloor', r.holes[0].par === 3, r.holes[0].par);
+    S.hole = 2; render();
+    handleAct('par-inc', mkBtn({ 'data-act': 'par-inc' }));
+    ok('parCeil', r.holes[2].par === 6, r.holes[2].par);
+    ok('parChipRel', viewHole().indexOf('PAR 6') >= 0);
+    S.rounds = keepR; S.activeRound = keepA; S.activeId = keepId; S.hole = keepHole; S.view = keepView;
+  });
+
+  run('parCourseUpdate', function () {
+    var keepC = S.courses, keepR = S.rounds, keepA = S.activeRound, keepId = S.activeId, keepView = S.view;
+    S.rounds = []; S.activeRound = null; S.activeId = null;
+    S.courses = [{ id: 'cc', name: 'Saved Links', tees: ['Blue'],
+      pars: [4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4] }];
+    handleAct('new-round', mkBtn({ 'data-act': 'new-round' }));
+    pickCourse('cc');
+    ok('pickLoaded', S.draft.courseId === 'cc' && S.draft.pars[0] === 4 && S.draft.pars.length === 18);
+    ok('toggleShown', viewSetup().indexOf('save-pars-toggle') >= 0);
+    S.draft.pars[0] = 5;
+    startRound();
+    ok('courseParsKept', S.courses[0].pars[0] === 4, S.courses[0].pars[0]);
+    ok('roundParsFresh', S.activeRound.holes[0].par === 5, S.activeRound.holes[0].par);
+    ok('teeAdded', (S.courses[0].tees || []).indexOf('Blue') >= 0);
+    /* same course, this time with the opt-in ticked */
+    S.rounds = []; S.activeRound = null; S.activeId = null;
+    handleAct('new-round', mkBtn({ 'data-act': 'new-round' }));
+    ok('toggleOffByDefault', S.draft.savePars === false);
+    pickCourse('cc');
+    handleAct('save-pars-toggle', mkBtn({ 'data-act': 'save-pars-toggle' }));
+    ok('toggleOn', S.draft.savePars === true && viewSetup().indexOf('chip on') >= 0);
+    S.draft.pars[1] = 6;
+    startRound();
+    ok('courseParsWritten', S.courses[0].pars[1] === 6, S.courses[0].pars[1]);
+    ok('courseParsOtherKept', S.courses[0].pars[0] === 4, S.courses[0].pars[0]);
+    S.courses = keepC; S.rounds = keepR; S.activeRound = keepA; S.activeId = keepId; S.view = keepView;
+  });
+
   /* -------------------------------- report ------------------------------- */
   var fails = out.filter(function (s) { return s.indexOf('=ok') < 0; });
   document.documentElement.setAttribute('data-test', out.length + ' checks, ' + fails.length + ' fails');

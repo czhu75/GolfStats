@@ -3,7 +3,7 @@
    Strategy: cache-first for same-origin GETs, background refresh for pages,
    network fallback to the cached shell so the app opens with no signal. */
 
-var CACHE_NAME = 'golfstats-1.0.0';
+var CACHE_NAME = 'golfstats-1.0.1';
 var CORE = ['./', './index.html', './manifest.json',
   './icon-192.png', './icon-180.png', './icon-512.png', './icon-maskable-512.png'];
 
