@@ -1,0 +1,13 @@
+# OS / editor noise
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# dev scratch files (test harness output, probes, temp HTML)
+__test.html
+__sw.html
+__probe*.js
+__*.txt
+
+# local backups of exported data — never commit your rounds
+golfstats-backup*.json
